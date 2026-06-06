@@ -1,9 +1,18 @@
 library(ggplot2)
 library(gridExtra)
 
-setwd("C:/Users/christophe.sauser/Documents/Paper3/R")
+setwd("C:/Users/chris/OneDrive/Documents/Papier3/Output")
 
-load("OutColonies.RData")
+# PRE-LOADING
+
+colonies <- c("Hornoya", "Bjornoya", "Runde", "Hjelmsoya", "Anda",
+              "Skomer", "May", "Rost", "Grumant", "SorGjeslingan", "Brittany")
+
+for (col in colonies) {
+  load(paste0("IPM_", col, ".Rdata"))
+  assign(paste0("out_", col), out)
+}
+rm(out)
 
 # PART 1 — COLONY METADATA
 
@@ -14,18 +23,21 @@ meta <- data.frame(
                "out_Skomer", "out_May", "out_Rost", "out_Grumant", "out_SorGjeslingan", "out_Brittany"),
   latitude = c(70.39, 74.45, 62.40, 71.09, 69.05, 51.74, 56.19, 67.52, 78.18, 64.66, 48.06),
   yr_start = c(1990,  2004,  2011,  2001,  2005,  1978,  1986,  2003,  2008,  2011,  1979),
+  region   = c("I",   "I",   "I",   "I",   "I",   "III", "II",  "I",   "I",   "I",   "III"),
+  ratio_s0 = c(0.656, 0.656, 0.656, 0.656, 0.656, 0.609, 0.574, 0.656, 0.656, 0.656, 0.609),
+  ratio_s1 = c(0.937, 0.937, 0.937, 0.937, 0.937, 0.984, 0.925, 0.937, 0.937, 0.937, 0.984),
   stringsAsFactors = FALSE
 )
 meta <- meta[order(meta$latitude), ]
 
-N_DRAWS <- 2000
+N_DRAWS <- 5000
 
 # PART 2 — MATRIX FUNCTIONS
 
-build_matrix <- function(phi, fe, sj = 0.6, b = 0.25) {
+build_matrix <- function(phi, fe, s0, s1, b = 0.25) {
   A <- matrix(0, 4, 4)
-  A[1, 4] <- (fe / 2) * sj
-  A[2, 1] <- sj
+  A[1, 4] <- (fe / 2) * s0
+  A[2, 1] <- s1
   A[3, 2] <- phi * (1 - b)
   A[3, 3] <- phi * b
   A[4, 2] <- phi * b
@@ -34,7 +46,7 @@ build_matrix <- function(phi, fe, sj = 0.6, b = 0.25) {
   A
 }
 
-matrix_analysis <- function(A) {
+matrix_analysis <- function(A, s0) {
   ev  <- eigen(A)
   lam <- Re(ev$values[1])
   w   <- Re(ev$vectors[, 1]); w <- w / sum(w)
@@ -46,7 +58,7 @@ matrix_analysis <- function(A) {
   e_recr <- E_mat[1,4] + E_mat[2,1]
   s_phi  <- S_mat[3,2] * 0.75 + S_mat[3,3] * 0.25 + S_mat[4,2] * 0.25 +
             S_mat[4,3] * 0.75 + S_mat[4,4]
-  s_fe   <- S_mat[1,4] * 0.3
+  s_fe   <- S_mat[1,4] * (s0 / 2)
   list(lambda = lam, e_surv = e_surv, e_recr = e_recr,
        s_phi = s_phi, s_fe = s_fe)
 }
@@ -65,14 +77,21 @@ for (i in seq_len(nrow(meta))) {
   n_total <- length(sl$mean.phi)
   idx     <- sample(seq_len(n_total), min(N_DRAWS, n_total))
 
+  ratio_s0 <- meta$ratio_s0[i]
+  ratio_s1 <- meta$ratio_s1[i]
+
   phi_draws <- sl$mean.phi[idx]
   fe_draws  <- sl$mean.fe[idx]
   sp_draws  <- sl$sigma.phi[idx]
   sf_draws  <- sl$sigma.fe[idx]
+  s0_draws  <- apply(sl$delta.s0[idx, , drop = FALSE], 1, mean, na.rm = TRUE)
+  s1_draws  <- apply(sl$delta.s1[idx, , drop = FALSE], 1, mean, na.rm = TRUE)
 
   e_surv <- e_recr <- s_phi_post <- s_fe_post <- lam_det <- numeric(length(idx))
   for (k in seq_along(idx)) {
-    res           <- matrix_analysis(build_matrix(phi_draws[k], fe_draws[k]))
+    res           <- matrix_analysis(
+                       build_matrix(phi_draws[k], fe_draws[k], s0_draws[k], s1_draws[k]),
+                       s0 = s0_draws[k])
     e_surv[k]     <- res$e_surv
     e_recr[k]     <- res$e_recr
     s_phi_post[k] <- res$s_phi
@@ -84,21 +103,6 @@ for (i in seq_len(nrow(meta))) {
   lam_s_obs  <- apply(log(lam_mat), 1, mean, na.rm = TRUE)
   omega_mat  <- sl$omega[idx, , drop = FALSE]
   omega_mean <- apply(omega_mat, 1, mean, na.rm = TRUE)
-
-  N_YEARS <- 500
-  phi_sim <- matrix(plogis(rnorm(length(idx) * N_YEARS, qlogis(phi_draws), sp_draws)),
-                    nrow = length(idx), ncol = N_YEARS)
-  fe_sim  <- matrix(exp(rnorm(length(idx) * N_YEARS, log(fe_draws), sf_draws)),
-                    nrow = length(idx), ncol = N_YEARS)
-
-  lam_s_sim <- sapply(seq_along(idx), function(k) {
-    mean(sapply(seq_len(N_YEARS), function(yr) {
-      log(Re(eigen(build_matrix(phi_sim[k, yr], fe_sim[k, yr]))$values[1]))
-    }))
-  })
-
-  var_phi_approx <- (phi_draws * (1 - phi_draws))^2 * sp_draws^2
-  var_fe_approx  <- fe_draws^2 * sf_draws^2
 
   # Annual time series posterior summaries
   yr_start <- meta$yr_start[meta$colony == col]
@@ -135,6 +139,35 @@ for (i in seq_len(nrow(meta))) {
   r_lam_fe  <- if (sum(ok_t) >= 4) cor(lam_ts[1:T_common][ok_t], fe_ts[1:T_common][ok_t])  else NA
   r_phi_fe  <- if (sum(ok_t) >= 4) cor(phi_ts[1:T_common][ok_t], fe_ts[1:T_common][ok_t])  else NA
 
+  # Stochastic growth: correlated (phi, fe) draws + sequential population projection
+  N_YEARS <- 500
+  BURN_IN <- 100
+  rho     <- if (is.na(r_phi_fe)) 0 else r_phi_fe
+
+  z_phi <- matrix(rnorm(length(idx) * N_YEARS), length(idx), N_YEARS)
+  z_fe  <- rho * z_phi + sqrt(1 - rho^2) * matrix(rnorm(length(idx) * N_YEARS), length(idx), N_YEARS)
+
+  phi_sim <- plogis(qlogis(phi_draws) + sp_draws * z_phi)
+  fe_sim  <- exp(log(fe_draws) + sf_draws * z_fe)
+  s0_sim  <- ratio_s0 * phi_sim
+  s1_sim  <- ratio_s1 * phi_sim
+
+  lam_s_sim <- sapply(seq_along(idx), function(k) {
+    n  <- rep(1, 4)
+    lg <- numeric(N_YEARS)
+    for (yr in seq_len(N_YEARS)) {
+      n2     <- as.numeric(build_matrix(phi_sim[k, yr], fe_sim[k, yr],
+                                        s0_sim[k, yr], s1_sim[k, yr]) %*% n)
+      lg[yr] <- log(sum(n2) / sum(n))
+      n      <- n2 / sum(n2)
+    }
+    mean(lg[(BURN_IN + 1):N_YEARS])
+  })
+
+  # Natural-scale CV for the buffering comparison
+  cv_phi <- apply(phi_sim, 1, sd) / apply(phi_sim, 1, mean)
+  cv_fe  <- apply(fe_sim,  1, sd) / apply(fe_sim,  1, mean)
+
   # LTRE variance decomposition on posterior mean time series
   s_phi_m <- mean(s_phi_post)
   s_fe_m  <- mean(s_fe_post)
@@ -151,12 +184,13 @@ for (i in seq_len(nrow(meta))) {
     latitude   = meta$latitude[i],
     yr_start   = yr_start,
     phi_draws  = phi_draws, fe_draws  = fe_draws,
+    s0_draws   = s0_draws,  s1_draws  = s1_draws,
     sp_draws   = sp_draws,  sf_draws  = sf_draws,
     e_surv     = e_surv,    e_recr    = e_recr,
     s_phi      = s_phi_post, s_fe     = s_fe_post,
     lam_det    = lam_det,
     lam_s_obs  = lam_s_obs, lam_s_sim = lam_s_sim,
-    var_phi    = var_phi_approx, var_fe = var_fe_approx,
+    cv_phi     = cv_phi,    cv_fe     = cv_fe,
     omega_mean = omega_mean,
     phi_ts = phi_ts, phi_ts_lo = phi_ts_lo, phi_ts_hi = phi_ts_hi, yr_phi = yr_phi,
     fe_ts  = fe_ts,  fe_ts_lo  = fe_ts_lo,  fe_ts_hi  = fe_ts_hi,  yr_fe  = yr_fe,
@@ -182,6 +216,12 @@ S <- do.call(rbind, lapply(post, function(p) {
     mean_fe_lo = quantile(p$fe_draws, 0.025),
     mean_fe_hi = quantile(p$fe_draws, 0.975),
     sd_fe      = sd(p$fe_draws),
+    mean_s0    = mean(p$s0_draws),
+    mean_s0_lo = quantile(p$s0_draws, 0.025),
+    mean_s0_hi = quantile(p$s0_draws, 0.975),
+    mean_s1    = mean(p$s1_draws),
+    mean_s1_lo = quantile(p$s1_draws, 0.025),
+    mean_s1_hi = quantile(p$s1_draws, 0.975),
     sigma_phi   = mean(p$sp_draws),
     sigma_fe    = mean(p$sf_draws),
     e_surv = mean(p$e_surv), e_surv_lo = quantile(p$e_surv, 0.025), e_surv_hi = quantile(p$e_surv, 0.975),
@@ -196,7 +236,7 @@ S <- do.call(rbind, lapply(post, function(p) {
     lam_s_sim_lo = quantile(exp(p$lam_s_sim), 0.025),
     lam_s_sim_hi = quantile(exp(p$lam_s_sim), 0.975),
     delta_lam_s  = mean(p$lam_s_obs - p$lam_s_sim),
-    var_phi_mean = mean(p$var_phi), var_fe_mean = mean(p$var_fe),
+    cv_phi_mean = mean(p$cv_phi), cv_fe_mean = mean(p$cv_fe),
     omega    = mean(p$omega_mean),
     omega_lo = quantile(p$omega_mean, 0.025),
     omega_hi = quantile(p$omega_mean, 0.975),
@@ -268,4 +308,33 @@ eiv_erecr_lat <- eiv_regression(
          e_recr = post[[col]]$e_recr[seq_len(N_DRAWS)])), colonies_ok),
   "lat", "e_recr")
 
-write.csv(S, "colony_summary.csv", row.names = FALSE)
+# EXPORT REGRESSIONS
+
+eiv_objs <- list(
+  tradeoff_phi_fe = eiv_tradeoff,
+  phi_vs_lat      = eiv_phi_lat_reg,
+  fe_vs_lat       = eiv_fe_lat_reg,
+  sphi_vs_lat     = eiv_sphi_lat,
+  sfe_vs_lat      = eiv_sfe_lat,
+  esurv_vs_lat    = eiv_esurv_lat,
+  erecr_vs_lat    = eiv_erecr_lat
+)
+
+R <- do.call(rbind, lapply(names(eiv_objs), function(nm) {
+  e <- eiv_objs[[nm]]
+  p_neg     <- e$slope_p
+  p_2sided  <- 2 * min(p_neg, 1 - p_neg)
+  data.frame(
+    regression  = nm,
+    slope_mean  = e$slope_mean,
+    slope_lo    = e$slope_lo,
+    slope_hi    = e$slope_hi,
+    p_neg       = p_neg,
+    p_2sided    = p_2sided,
+    r2_mean     = e$r2_mean,
+    stringsAsFactors = FALSE
+  )
+}))
+
+write.csv(S, "colony_summary_v6.csv", row.names = FALSE)
+write.csv(R, "regressions_v6.csv",    row.names = FALSE)
