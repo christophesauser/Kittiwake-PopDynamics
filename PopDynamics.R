@@ -3,7 +3,6 @@ library(gridExtra)
 
 setwd("C:/Users/chris/OneDrive/Documents/Papier3/Output")
 
-# PRE-LOADING
 
 colonies <- c("Hornoya", "Bjornoya", "Runde", "Hjelmsoya", "Anda",
               "Skomer", "May", "Rost", "Grumant", "SorGjeslingan", "Brittany")
@@ -14,7 +13,7 @@ for (col in colonies) {
 }
 rm(out)
 
-# PART 1 — COLONY METADATA
+# PART 1- COLONY METADATA
 
 meta <- data.frame(
   colony   = c("Hornoya", "Bjornoya", "Runde", "Hjelmsoya", "Anda",
@@ -32,7 +31,7 @@ meta <- meta[order(meta$latitude), ]
 
 N_DRAWS <- 5000
 
-# PART 2 — MATRIX FUNCTIONS
+# PART 2- MATRIX FUNCTIONS
 
 build_matrix <- function(phi, fe, s0, s1, b = 0.25) {
   A <- matrix(0, 4, 4)
@@ -63,7 +62,7 @@ matrix_analysis <- function(A, s0) {
        s_phi = s_phi, s_fe = s_fe)
 }
 
-# PART 3 — PER-COLONY POSTERIOR EXTRACTION
+# PART 3- PER-COLONY POSTERIOR EXTRACTION
 
 post <- list()
 for (i in seq_len(nrow(meta))) {
@@ -203,7 +202,7 @@ for (i in seq_len(nrow(meta))) {
 
 colonies_ok <- names(post)
 
-# PART 4 — SUMMARY TABLE
+# PART 4- SUMMARY TABLE
 
 S <- do.call(rbind, lapply(post, function(p) {
   data.frame(
@@ -248,7 +247,7 @@ S <- do.call(rbind, lapply(post, function(p) {
 S <- S[order(S$latitude), ]
 S$colony <- factor(S$colony, levels = S$colony)
 
-# PART 5 — EIV REGRESSIONS
+# PART 5- EIV REGRESSIONS
 
 eiv_regression <- function(post_list, x_var, y_var, n_draws = N_DRAWS) {
   cols   <- names(post_list)
